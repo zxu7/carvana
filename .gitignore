@@ -1,0 +1,12 @@
+# mac
+**/.DS_Store
+**/.idea
+
+# pycache
+**/__pycache__
+
+# pyc
+*.pyc
+
+# experiment
+experiment/**.hdf5
