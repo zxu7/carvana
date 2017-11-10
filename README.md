@@ -6,8 +6,8 @@ Link: https://www.kaggle.com/c/carvana-image-masking-challenge
 ## Dependencies
 - Python 3
 - numpy
-- keras >= 2.0.3
-- tensorflow >= 1.0.1
+- keras >= 2.0.9
+- tensorflow >= 1.3.0
 
 ## Execution
 ```

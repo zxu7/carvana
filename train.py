@@ -10,6 +10,7 @@ from keras.callbacks import ModelCheckpoint, CSVLogger
 from math import ceil
 from keras import backend as K
 from keras.backend.tensorflow_backend import set_session
+from keras.utils.training_utils import multi_gpu_model
 
 img_dir = os.path.join(os.path.expanduser('~'), 'school/data science/kaggle/carvana/train')
 mask_dir = os.path.join(os.path.expanduser('~'), 'school/data science/kaggle/carvana/train_masks')
@@ -22,9 +23,9 @@ def create_args():
     parser.add_argument('--target_size', type=tuple, default=(256,256))
     parser.add_argument('--grayscale', type=bool, default=True)
     parser.add_argument('--batch_size', type=int, default=2)
-    parser.add_argument('--epochs', type=int, default=20)
+    parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--gpu', type=float, default=1)
-    parser.add_argument('--gpus', type=str, default=None)
+    parser.add_argument('--gpus', type=str, default=None, help="gpu1 use '1'; multi-gpu training use '0,1';")
     return parser.parse_args()
 
 
@@ -38,6 +39,8 @@ if __name__ == "__main__":
     grayscale = args.grayscale
     batch_size = args.batch_size
     epochs = args.epochs
+
+
     now = datetime.now()
     if grayscale:
         target_size = target_size + (1,)
@@ -62,25 +65,54 @@ if __name__ == "__main__":
     normalize = None
 
     # load model and train
+    # config gpu% use
     if args.gpu:
         config = tf.ConfigProto()
         config.gpu_options.per_process_gpu_memory_fraction = args.gpu
-        config.gpu_options.visible_device_list = args.gpus
+        if len(args.gpus.split(',')) == 1:
+            config.gpu_options.visible_device_list = args.gpus
         set_session(tf.Session(config=config))
 
     train_gen = data_gen(train_fns, fn_dict, shuffle=True)
     valid_gen = data_gen(valid_fns, fn_dict)
-    # model = SimpleCNN(target_size, normalize=normalize)
-    model = unet(target_size, normalize=normalize)
-    checkpointer = ModelCheckpoint(filepath=filepath, verbose=1, save_best_only=True, monitor='val_dice_coef',
-                                   mode='max')
-    csvlogger = CSVLogger(filepath_dir + 'training.log')
-    model.compile(loss=bce_dc_loss, optimizer=rmsprop(1e-4), metrics=[dice_coef, 'accuracy'])
-    try:
-        model.fit_generator(train_gen, steps_per_epoch=ceil(len(train_fns)/batch_size), epochs=epochs,
-                            validation_data=valid_gen, validation_steps=ceil(len(valid_fns)/batch_size),
-                            callbacks=[checkpointer, csvlogger])
-    except AttributeError:
-        pass
+
+    # single-gpu training
+    if len(args.gpus.split(',')) == 1:
+        # model = SimpleCNN(target_size, normalize=normalize)
+        model = unet(target_size, normalize=normalize)
+        checkpointer = ModelCheckpoint(filepath=filepath, verbose=1, save_best_only=True, monitor='val_dice_coef',
+                                       mode='max')
+        csvlogger = CSVLogger(filepath_dir + 'training.log')
+        model.compile(loss=bce_dc_loss, optimizer=rmsprop(1e-4), metrics=[dice_coef, 'accuracy'])
+        try:
+            model.fit_generator(train_gen, steps_per_epoch=ceil(len(train_fns)/batch_size), epochs=epochs,
+                                validation_data=valid_gen, validation_steps=ceil(len(valid_fns)/batch_size),
+                                callbacks=[checkpointer, csvlogger])
+        except AttributeError:
+            pass
+
+    # multi-gpu training
+    elif len(args.gpus.split(',')) > 1:
+        with tf.device("/cpu:0"):
+            # model = SimpleCNN(target_size, normalize=normalize)
+            model = unet(target_size, normalize=normalize)
+            multi_model = multi_gpu_model(model, len(args.gpus.split(',')))
+        # TODO: ModelCheckpoint does not work for multi_gpu_model yet. Make one that works!
+        # checkpointer = ModelCheckpoint(filepath=filepath, verbose=1, save_best_only=True, monitor='val_dice_coef',
+        #                                mode='max')
+        csvlogger = CSVLogger(filepath_dir + 'training.log')
+        model.compile(loss=bce_dc_loss, optimizer=rmsprop(1e-4), metrics=[dice_coef, 'accuracy'])
+        multi_model.compile(loss=bce_dc_loss, optimizer=rmsprop(1e-4), metrics=[dice_coef, 'accuracy'])
+        try:
+            multi_model.fit_generator(train_gen, steps_per_epoch=ceil(len(train_fns)/batch_size), epochs=epochs,
+                                validation_data=valid_gen, validation_steps=ceil(len(valid_fns)/batch_size),
+                                callbacks=[csvlogger])
+        except AttributeError:
+            pass
+        model.set_weights(multi_model.get_weights())
+        model.save(filepath=filepath)
+
+    else:
+        raise NotImplementedError("--gpus argument not understood. argument has to have form '0,1' or '1' ")
 
 
